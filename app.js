@@ -1,3 +1,4 @@
+import { staticFetch as fetch } from './static-store.js';
 const APP_VERSION = '0.1.0';
 const DEFAULT_WORD_BATCH_SIZE = 24;
 const DEFAULT_WORD_ORDER_SEED = 20260921;
@@ -363,7 +364,7 @@ function recoverLocalState(username) {
     return { pending: false, restored: false };
   }
   const savedAt = new Date(Number(pending.savedAt || 0)).toLocaleString('zh-CN');
-  const restore = window.confirm(`发现 ${savedAt} 保存到本机的未同步学习草稿。恢复草稿会用它替换当前账号的服务器记录，是否恢复？`);
+  const restore = window.confirm(`发现 ${savedAt} 保存到本机的未同步学习草稿。恢复草稿会用它替换当前浏览器的学习记录，是否恢复？`);
   if (!restore) return { pending: true, restored: false };
   const latestRevision = Number(state.dataRevision || 0);
   state = hydrateState(pending.state);
@@ -1200,7 +1201,7 @@ function renderRealExamHeader(exam, mode, session) {
   const submittedNote = session.submittedAt ? '本次已提交，答案已锁定；可以查看并复盘。' : '交卷前不显示答案，作答会自动保存。';
   const modeLabel = mode === 'full' ? '整套模拟' : mode === 'reading' ? '阅读专项' : mode === 'listening' ? '听力专项' : '写译专项';
   const answerSourcePath = exam.answerSourceFiles?.[0] || exam.questions?.find((question) => question.answerSourcePath)?.answerSourcePath || '';
-  const answerSourceLink = session.submittedAt && answerSourcePath
+  const answerSourceLink = false
     ? `<a class="button button-secondary button-small answer-source-link" href="/resource/${encodeURIComponent(answerSourcePath)}" target="_blank" rel="noreferrer">打开本套答案解析 ↗</a>`
     : '';
   return `<div class="exam-top real-exam-top"><div><div class="eyebrow">${modeLabel} · ${escapeHTML(examPeriodLabel(exam))}</div><h1>${escapeHTML(exam.title)}</h1><p class="card-note">${submittedNote}</p></div><div class="real-exam-top-actions"><div class="exam-timer" id="real-exam-timer">${timerLabel}</div>${answerSourceLink}<button class="button button-ghost button-small" data-action="real-exam-back">返回试卷列表</button></div></div><div class="exam-mode-switch"><button class="${mode === 'full' ? 'active' : ''}" data-action="exam-mode" data-exam-id="${escapeHTML(exam.id)}" data-exam-mode="full">整套模拟</button><button class="${mode === 'reading' ? 'active' : ''}" data-action="exam-mode" data-exam-id="${escapeHTML(exam.id)}" data-exam-mode="reading">阅读专项</button><button class="${mode === 'listening' ? 'active' : ''}" data-action="exam-mode" data-exam-id="${escapeHTML(exam.id)}" data-exam-mode="listening">听力专项</button><button class="${mode === 'writingTranslation' ? 'active' : ''}" data-action="exam-mode" data-exam-id="${escapeHTML(exam.id)}" data-exam-mode="writingTranslation">写译专项</button></div>`;
@@ -1896,7 +1897,7 @@ async function importData(file) {
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok || !result.state) throw new Error(result.error || 'import failed');
     state = hydrateState(result.state);
-    showToast('备份已恢复并写入数据库。');
+    showToast('备份已恢复到当前浏览器。');
     activeView = state.lastView && VIEW_NAMES[state.lastView] ? state.lastView : 'home';
     backupDialog?.close();
     render();
@@ -2272,75 +2273,16 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', flushPendingStateSave);
 
-/* ---------------- 注册 / 登录 ---------------- */
-
-let authMode = 'login';
-
 function showAuthScreen(message = '') {
-  authLoading.hidden = true;
-  appShell.hidden = true;
-  authScreen.hidden = false;
-  if (message) {
-    authError.textContent = message;
-    authError.hidden = false;
+    authLoading.hidden = true;
+    appShell.hidden = false;
+    main.textContent = message || '内容加载失败，请刷新重试。';
   }
-  authUsernameInput.focus();
-}
-
-function setUserChip(username) {
-  userNameLabel.textContent = username;
-  userAvatarLabel.textContent = String(username).slice(0, 1).toUpperCase();
-}
-
-authToggle.addEventListener('click', () => {
-  authMode = authMode === 'login' ? 'register' : 'login';
-  authSwitchCopy.textContent = authMode === 'login' ? '还没有账号？' : '已经有账号？';
-  authToggle.textContent = authMode === 'login' ? '注册一个' : '直接登录';
-  authSubmit.textContent = authMode === 'login' ? '登 录' : '注 册';
-  authPasswordInput.autocomplete = authMode === 'login' ? 'current-password' : 'new-password';
-  authError.hidden = true;
-});
-
-authForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const username = authUsernameInput.value.trim();
-  const password = authPasswordInput.value;
-  if (authMode === 'register' && !/^[A-Za-z0-9]{8,}$/.test(username)) {
-    authError.textContent = '账号需为 8 位以上的字母或数字组合。';
-    authError.hidden = false;
-    return;
+  function setUserChip() {
+    userNameLabel.textContent = '本机学习';
+    userAvatarLabel.textContent = '学';
   }
-  if (password.length < 6) {
-    authError.textContent = '密码至少需要 6 位。';
-    authError.hidden = false;
-    return;
-  }
-  authSubmit.disabled = true;
-  authSubmit.textContent = authMode === 'login' ? '登录中…' : '注册中…';
-  try {
-    const response = await fetch(`/api/auth/${authMode}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) throw new Error(data.error || '操作失败，请稍后再试。');
-    await bootApp(username);
-  } catch (error) {
-    authError.textContent = error.message;
-    authError.hidden = false;
-  } finally {
-    authSubmit.disabled = false;
-    authSubmit.textContent = authMode === 'login' ? '登 录' : '注 册';
-  }
-});
-
-logoutButton.addEventListener('click', async () => {
-  await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
-  window.location.reload();
-});
-
-async function bootApp(username) {
+  async function bootApp(username) {
   appShell.hidden = true;
   authLoading.hidden = false;
   setUserChip(username);
@@ -2370,10 +2312,10 @@ async function bootApp(username) {
     render();
     registerWebMcp();
     authLoading.hidden = true;
-    authScreen.hidden = true;
+    if (authScreen) authScreen.hidden = true;
     appShell.hidden = false;
     if (recovery.restored) await saveState('本机草稿已恢复并同步');
-    else if (recovery.pending) showToast('有一份未同步草稿仍保存在本机；当前显示服务器记录。', 'warn');
+    else if (recovery.pending) showToast('有一份未同步草稿仍保存在本机；当前显示浏览器记录。', 'warn');
     return true;
   } catch (error) {
     stateReady = false;
@@ -2382,18 +2324,5 @@ async function bootApp(username) {
   }
 }
 
-async function init() {
-  try {
-    const response = await fetch('/api/auth/me');
-    const auth = await response.json();
-    if (auth.authenticated) {
-      if (await bootApp(auth.username)) return;
-      return;
-    }
-  } catch {
-    // 网络异常时进入登录页
-  }
-  showAuthScreen();
-}
-
+async function init() { await bootApp('public-browser'); }
 init();
