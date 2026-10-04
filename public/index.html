@@ -25,13 +25,13 @@
             <label for="auth-username">账号</label>
             <input id="auth-username" name="username" type="text" autocomplete="username" placeholder="8–32 位字母或数字" minlength="8" maxlength="32" pattern="[A-Za-z0-9]{8,32}" required />
           </div>
-          <div class="field" id="auth-confirm-field" hidden>
-            <label for="auth-confirm-password">确认密码</label>
-            <input id="auth-confirm-password" name="confirmPassword" type="password" autocomplete="new-password" maxlength="128" disabled />
-          </div>
           <div class="field">
             <label for="auth-password">密码</label>
             <input id="auth-password" name="password" type="password" autocomplete="current-password" placeholder="至少 6 位" maxlength="128" required />
+          </div>
+          <div class="field" id="auth-confirm-field" hidden>
+            <label for="auth-confirm-password">确认密码</label>
+            <input id="auth-confirm-password" name="confirmPassword" type="password" autocomplete="new-password" maxlength="128" disabled />
           </div>
           <button class="button button-primary auth-submit" id="auth-submit" type="submit">登 录</button>
           <div class="auth-switch"><span id="auth-switch-copy">还没有账号？</span><button type="button" class="text-button" id="auth-toggle">注册一个</button></div>
