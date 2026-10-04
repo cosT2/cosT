@@ -1188,7 +1188,7 @@ function renderRealExamCard(exam) {
   const status = [...latestByMode.entries()].map(([mode, session]) => `${mode === 'full' ? '整套' : mode === 'reading' ? '阅读' : mode === 'listening' ? '听力' : '写译'}${session.submittedAt ? '已交卷' : '有草稿'}`).join(' · ');
   const contentNote = !fullAvailable && exam.fullUnavailableReasons?.length
     ? `整套练习已开放 · 内容待补：${exam.fullUnavailableReasons.join('、')}` : '';
-  const note = [status, contentNote].filter(Boolean).join(' · ');
+  const note = [status, contentNote, exam.sharedListeningPracticeNote].filter(Boolean).join(' · ');
   return `<article class="exam-catalog-card"><div class="exam-card-top"><div><div class="eyebrow">${sourceLabel} · ${escapeHTML(examPeriodLabel(exam))}</div><h3>${escapeHTML(exam.title)}</h3></div><span class="pill ${fullAvailable ? 'pill-green' : audioAvailable ? 'pill-blue' : ''}">${fullAvailable ? '完整性已验收' : audioAvailable ? '含配对音频' : '音频待补'}</span></div><div class="sim-meta"><span class="pill">${exam.questionCount} 题</span><span class="pill">听力 ${listeningCount}</span><span class="pill">阅读 ${readingCount}</span></div><div class="exam-card-actions"><button class="button button-primary button-small" data-action="exam-open" data-exam-id="${escapeHTML(exam.id)}" data-exam-mode="full" ${fullPracticeEnabled ? '' : 'disabled'}>${fullPracticeEnabled ? '开始整套练习' : '暂无可练题目'}</button><button class="button button-secondary button-small" data-action="exam-open" data-exam-id="${escapeHTML(exam.id)}" data-exam-mode="reading" ${readingAvailable ? '' : 'disabled'}>阅读专项</button><button class="button button-secondary button-small" data-action="exam-open" data-exam-id="${escapeHTML(exam.id)}" data-exam-mode="listening" ${listeningAvailable ? '' : 'disabled'}>听力专项</button></div>${note ? `<div class="card-note" style="margin-top:12px">${escapeHTML(note)}</div>` : ''}</article>`;
 }
 
@@ -1221,7 +1221,7 @@ function renderExamAudioPanel(exam, mode, session) {
   if (!exam.audio?.url) return `<div class="notice audio-missing"><span class="notice-icon">!</span><div><strong>本套暂无可用听力音频</strong>${mode === 'listening' ? '听力专项暂不可开始，补齐对应音频后开放。' : '整套模拟中的听力材料尚未匹配。'}</div></div>`;
   const listeningDone = Boolean(session.listeningEndedAt);
   const playbackStatus = listeningDone ? '听力已结束' : session.audioPlaying ? '正在播放' : '尚未播放';
-  return `<div class="audio-panel" id="real-audio-panel"><div class="audio-panel-top"><div><div class="eyebrow">听力音频</div><strong>${escapeHTML(exam.audio.label || '听力材料')}</strong></div><span class="pill ${listeningDone ? 'pill-green' : 'pill-blue'}" data-audio-status>${playbackStatus}</span></div><audio class="exam-audio" data-exam-audio="${escapeHTML(exam.id)}" controls preload="metadata" src="${escapeHTML(realExamAudioUrl(exam))}"></audio>${mode === 'listening' ? `<div class="audio-panel-foot"><span>${listeningDone ? '现在进入 2 分钟答题窗口。' : '练习规则：听力期间只显示选项，不显示题干和原文。播放结束后才开始 2 分钟答题窗口。'}</span></div>` : ''}</div>`;
+  return `${exam.sharedListeningPracticeNote ? `<p class="card-note" role="note" aria-label="共用听力说明">${escapeHTML(exam.sharedListeningPracticeNote)}</p>` : ''}<div class="audio-panel" id="real-audio-panel"><div class="audio-panel-top"><div><div class="eyebrow">听力音频</div><strong>${escapeHTML(exam.audio.label || '听力材料')}</strong></div><span class="pill ${listeningDone ? 'pill-green' : 'pill-blue'}" data-audio-status>${playbackStatus}</span></div><audio class="exam-audio" data-exam-audio="${escapeHTML(exam.id)}" controls preload="metadata" src="${escapeHTML(realExamAudioUrl(exam))}"></audio>${mode === 'listening' ? `<div class="audio-panel-foot"><span>${listeningDone ? '现在进入 2 分钟答题窗口。' : '练习规则：听力期间只显示选项，不显示题干和原文。播放结束后才开始 2 分钟答题窗口。'}</span></div>` : ''}</div>`;
 }
 
 function renderRealChoiceOptions(question, session, { hidePrompt = false, disabled = false } = {}) {
@@ -1734,7 +1734,7 @@ function renderResources() {
 }
 
 function renderResourceRow(item) {
-  const href = `/resource/${encodeURIComponent(item.relativePath)}`;
+  const href = item.url || `/resource/${encodeURIComponent(item.relativePath)}`;
   const action = ['audio', 'pdf', 'image', 'text', 'transcript'].includes(item.kind) ? '打开' : '查看';
   return `<div class="resource-row"><div><div class="resource-name" title="${escapeHTML(item.name)}">${escapeHTML(item.name)}</div></div><div class="resource-cell">${escapeHTML(item.topic || '其他')}</div><div class="resource-cell">${escapeHTML(item.extension || item.kind)}</div><div><a class="resource-open" href="${href}" target="_blank" rel="noreferrer">${action} ↗</a></div></div>`;
 }
