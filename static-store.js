@@ -1,6 +1,13 @@
 // GitHub Pages temporary edition: no accounts; records stay in this browser.
 const nativeFetch = window.fetch.bind(window);
 const libraries = new Map();
+let mediaPromise;
+async function loadMedia() {
+  if (!mediaPromise) mediaPromise = nativeFetch(new URL('./static-media.json', import.meta.url), { cache: 'no-cache' })
+    .then(async r => { if (!r.ok) throw new Error('听力资源配置下载失败'); return r.json(); })
+    .catch(error => { mediaPromise = null; throw error; });
+  return mediaPromise;
+}
 const database = new Promise((resolve, reject) => {
   const request = indexedDB.open('cet6-public-study', 1);
   request.onupgradeneeded = () => request.result.createObjectStore('records');
@@ -58,8 +65,8 @@ export async function staticFetch(input, options = {}) {
     }
     const library = await loadLibrary(match[1]);
     const exam = library.exams.find(x => x.id === decodeURIComponent(match[2]));
-    // Raw audio files are not on Pages. Do not display a broken player.
-    return exam ? response({ ...exam, audio: null, ok: true }) : response({ ok: false }, 404);
+    const media = await loadMedia();
+    return exam ? response({ ...exam, audio: media[exam.audio?.sourcePath] || null, ok: true }) : response({ ok: false }, 404);
   }
   if (value === '/content/catalog.json') return response({ items: [], totalFiles: 0, totalBytes: 0, summary: {}, sourceAvailable: false });
   if (value.startsWith('/content/')) return nativeFetch(new URL(`.${value}`, import.meta.url), options);

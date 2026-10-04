@@ -1,4 +1,4 @@
-import { staticFetch as fetch } from './static-store.js';
+import { staticFetch as fetch } from './static-store.js?v=20261004-media-1';
 const APP_VERSION = '0.1.0';
 const DEFAULT_WORD_BATCH_SIZE = 24;
 const DEFAULT_WORD_ORDER_SEED = 20260921;
@@ -1157,7 +1157,9 @@ function realQuestionsFor(exam, mode = 'full', unitId = '') {
 
 function realExamAudioUrl(exam) {
   const url = exam.audio?.url || '';
-  return url ? encodeURI(url) : '';
+  // URL normalizes raw Chinese paths without double-encoding existing % escapes.
+  if (!url) return '';
+  try { return new URL(url, window.location.href).href; } catch { return ''; }
 }
 
 function renderRealExamCard(exam) {
