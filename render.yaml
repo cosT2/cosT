@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: cet6-study
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CET6_HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        sync: false
+      - key: CET6_MEDIA_ORIGIN
+        value: https://cet6-media.simplesincost.workers.dev

@@ -1,6 +1,11 @@
 .git
 node_modules
-data/*
 .env
 .env.*
+data
+tmp
+部署包
+GitHub上传包
+云端部署包
+content/_*
 *.log

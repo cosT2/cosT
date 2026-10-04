@@ -12,9 +12,12 @@ import { createReadStream, existsSync } from 'node:fs';
 import { access, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { resourceDownloadURL, cloudResourceOrigin, publicMediaKeys } from './cloud-resources.mjs';
 
-import {
+const CLOUD_DATABASE = Boolean(process.env.DATABASE_URL);
+const {
   DATABASE_SCHEMA_VERSION,
   StateConflictError,
   openDatabase,
@@ -24,7 +27,7 @@ import {
   queryWordStats,
   migrateLegacyState,
   tableExists
-} from './db.mjs';
+} = await import(CLOUD_DATABASE ? './db-postgres.mjs' : './db.mjs');
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PUBLIC_ROOT = existsSync(path.join(ROOT, 'index.html')) ? ROOT : path.join(ROOT, 'public');
@@ -33,8 +36,11 @@ const CONTENT_ROOT = path.join(ROOT, 'content');
 const DATA_ROOT = path.resolve(process.env.CET6_DATA_ROOT || path.join(ROOT, 'data'));
 const DB_PATH = path.join(DATA_ROOT, 'cet6.db');
 const SOURCE_ROOT = path.resolve(process.env.CET6_LIBRARY_ROOT || 'D:\\BaiduNetdiskDownload\\六级');
-const PORT = Number(process.env.CET6_PORT || 5173);
-const HOST = process.env.CET6_HOST || '127.0.0.1';
+const PORT = Number(process.env.PORT || process.env.CET6_PORT || 5173);
+const HOST = process.env.CET6_HOST || (process.env.RENDER ? '0.0.0.0' : '127.0.0.1');
+const PRODUCTION = process.env.NODE_ENV === 'production';
+if (PRODUCTION && !CLOUD_DATABASE) throw new Error('公网生产环境必须配置 DATABASE_URL，禁止使用临时 SQLite 保存账号');
+const CSP = `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' ${cloudResourceOrigin}; connect-src 'self' ${cloudResourceOrigin}; frame-ancestors 'self'; base-uri 'self'; form-action 'self'`;
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const COOKIE_NAME = 'cet6_session';
 const MAX_STATE_BYTES = 8 * 1024 * 1024;
@@ -142,12 +148,12 @@ function fullExamQuestionsAreUsable(questions) {
 
 /* ---------------- database ---------------- */
 
-const db = openDatabase(DB_PATH);
+const db = (await openDatabase(DB_PATH));
 
 // 老库升级：把遗留的 user_state JSON 搬进新表（幂等，已迁移的用户自动跳过）。
-if (tableExists(db, 'user_state')) {
+if ((await tableExists(db, 'user_state'))) {
   try {
-    const { migrated, failed } = migrateLegacyState(db);
+    const { migrated, failed } = (await migrateLegacyState(db));
     if (migrated.length) console.log(`Migrated legacy state for user ids: ${migrated.join(', ')}`);
     for (const item of failed) console.error(`Legacy state migration failed for user ${item.user_id}: ${item.error}`);
   } catch (error) {
@@ -155,16 +161,17 @@ if (tableExists(db, 'user_state')) {
   }
 }
 
-db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(new Date().toISOString());
+(await db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(new Date().toISOString()));
 
 /* ---------------- auth helpers ---------------- */
 
-function hashPassword(password, salt) {
-  return crypto.scryptSync(password, salt, 64).toString('hex');
+const scryptAsync = promisify(crypto.scrypt);
+async function hashPassword(password, salt) {
+  return (await scryptAsync(password, salt, 64)).toString('hex');
 }
 
 function isValidUsername(username) {
-  return typeof username === 'string' && /^[A-Za-z0-9]{8,}$/.test(username);
+  return typeof username === 'string' && /^[A-Za-z0-9]{8,32}$/.test(username);
 }
 
 function isValidPassword(password) {
@@ -208,42 +215,42 @@ function allowAuthRequest(req, action) {
   return 0;
 }
 
-function getSessionUser(req) {
+async function getSessionUser(req) {
   const token = parseCookies(req)[COOKIE_NAME];
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
-  const row = db.prepare(`
+  const row = (await db.prepare(`
     SELECT sessions.token, sessions.expires_at, users.id, users.username
     FROM sessions JOIN users ON users.id = sessions.user_id
     WHERE sessions.token = ?
-  `).get(token);
+  `).get(token));
   if (!row) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) {
-    db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+    (await db.prepare('DELETE FROM sessions WHERE token = ?').run(token));
     return null;
   }
   return { id: row.id, username: row.username, token: row.token };
 }
 
 function setSessionCookie(res, token) {
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${PRODUCTION ? '; Secure' : ''}`);
 }
 
 function clearSessionCookie(res) {
-  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
+  res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0${PRODUCTION ? '; Secure' : ''}`);
 }
 
-function issueSession(res, userId) {
+async function issueSession(res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-  db.prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
-    .run(token, userId, new Date().toISOString(), expiresAt);
+  (await db.prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+    .run(token, userId, new Date().toISOString(), expiresAt));
   // 允许多设备登录，但限制长期闲置会话数量，避免会话表无限增长。
-  db.prepare(`
+  (await db.prepare(`
     DELETE FROM sessions
     WHERE user_id = ? AND token NOT IN (
       SELECT token FROM sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 8
     )
-  `).run(userId, userId);
+  `).run(userId, userId));
   setSessionCookie(res, token);
   return token;
 }
@@ -373,7 +380,7 @@ function sendText(res, statusCode, text, contentType = 'text/plain; charset=utf-
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'SAMEORIGIN',
     'Referrer-Policy': 'same-origin',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'",
+    'Content-Security-Policy': CSP,
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
   });
   res.end(text);
@@ -414,7 +421,7 @@ async function serveFile(res, filePath, { cache = false, req = null } = {}) {
       'Content-Length': end - start + 1,
       'Cache-Control': cache ? 'private, max-age=3600' : 'no-store',
       'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'",
+      'Content-Security-Policy': CSP,
       'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
       'Accept-Ranges': 'bytes',
       'Content-Disposition': 'inline'
@@ -596,28 +603,31 @@ async function handleAuth(req, res, pathname) {
     let body;
     try { body = JSON.parse(await readBody(req, 64 * 1024)); } catch { return sendJSON(res, 400, { ok: false, error: '请求格式错误' }); }
     const { username, password } = body || {};
-    if (!isValidUsername(username)) return sendJSON(res, 400, { ok: false, error: '账号需为 8 位以上的字母或数字组合' });
-    if (!isValidPassword(password)) return sendJSON(res, 400, { ok: false, error: '密码需为 6-128 位字符' });
-    const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+    if (!isValidUsername(username)) return sendJSON(res, 400, { ok: false, error: '账号需为 8-32 位字母或数字组合' });
+    if (!isValidPassword(password) || password.length < 8) return sendJSON(res, 400, { ok: false, error: '注册密码需为 8-128 位字符' });
+    const existing = (await db.prepare('SELECT id FROM users WHERE username = ?').get(username));
     if (existing) return sendJSON(res, 409, { ok: false, error: '该账号已被注册' });
     const salt = crypto.randomBytes(16).toString('hex');
-    const passwordHash = hashPassword(password, salt);
+    const passwordHash = await hashPassword(password, salt);
+    let newUserId = null;
+    let stateInitialized = false;
     try {
-      const info = db.prepare('INSERT INTO users (username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)')
-        .run(username, passwordHash, salt, new Date().toISOString());
+      const info = (await db.prepare('INSERT INTO users (username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)')
+        .run(username, passwordHash, salt, new Date().toISOString()));
       const userId = Number(info.lastInsertRowid);
+      newUserId = userId;
       // 新账号先落一份设置行，readState 才有内容可读；初始化失败时删除账号，避免半成品账号。
-      writeState(db, userId, defaultStateForSignup());
-      issueSession(res, userId);
+      (await writeState(db, userId, defaultStateForSignup()));
+      stateInitialized = true;
+      (await issueSession(res, userId));
       return sendJSON(res, 200, { ok: true, username });
     } catch (error) {
-      if (String(error?.code || '').includes('SQLITE_CONSTRAINT')) {
+      if (String(error?.code || '').includes('SQLITE_CONSTRAINT') || error?.code === '23505') {
         return sendJSON(res, 409, { ok: false, error: '该账号已被注册' });
       }
-      const failedUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-      if (failedUser) db.prepare('DELETE FROM users WHERE id = ?').run(failedUser.id);
+      if (newUserId && !stateInitialized) (await db.prepare('DELETE FROM users WHERE id = ?').run(newUserId));
       console.error('初始化新账号数据失败:', error);
-      return sendJSON(res, 500, { ok: false, error: '账号初始化失败，未创建半成品账号。' });
+      return sendJSON(res, 500, { ok: false, error: stateInitialized ? '账号已创建，请尝试登录。' : '账号初始化失败，请重试。' });
     }
   }
 
@@ -633,23 +643,28 @@ async function handleAuth(req, res, pathname) {
     if (!isValidUsername(username) || !isValidPassword(password)) {
       return sendJSON(res, 401, { ok: false, error: '账号或密码不正确' });
     }
-    const user = db.prepare('SELECT id, username, password_hash, salt FROM users WHERE username = ?').get(String(username || ''));
-    if (!user || hashPassword(String(password || ''), user.salt) !== user.password_hash) {
+    const user = (await db.prepare('SELECT id, username, password_hash, salt FROM users WHERE username = ?').get(String(username || '')));
+    // Unknown accounts take the same password-hash path; compare equal-sized hashes in constant time.
+    const candidateHash = await hashPassword(password, user?.salt || '00000000000000000000000000000000');
+    const storedHash = user?.password_hash || '0'.repeat(128);
+    const candidate = Buffer.from(candidateHash, 'hex');
+    const stored = Buffer.from(storedHash, 'hex');
+    if (!user || stored.length !== candidate.length || !crypto.timingSafeEqual(candidate, stored)) {
       return sendJSON(res, 401, { ok: false, error: '账号或密码不正确' });
     }
-    issueSession(res, user.id);
+    (await issueSession(res, user.id));
     return sendJSON(res, 200, { ok: true, username: user.username });
   }
 
   if (pathname === '/api/auth/logout' && req.method === 'POST') {
-    const user = getSessionUser(req);
-    if (user) db.prepare('DELETE FROM sessions WHERE token = ?').run(user.token);
+    const user = (await getSessionUser(req));
+    if (user) (await db.prepare('DELETE FROM sessions WHERE token = ?').run(user.token));
     clearSessionCookie(res);
     return sendJSON(res, 200, { ok: true });
   }
 
   if (pathname === '/api/auth/me') {
-    const user = getSessionUser(req);
+    const user = (await getSessionUser(req));
     if (!user) return sendJSON(res, 200, { authenticated: false });
     return sendJSON(res, 200, { authenticated: true, username: user.username });
   }
@@ -661,13 +676,13 @@ async function handleAuth(req, res, pathname) {
 
 async function handleState(req, res, user) {
   if (req.method === 'GET') {
-    let state = readState(db, user.id);
+    let state = (await readState(db, user.id));
     // 老账号在迁移前就存在、或设置行缺失时自愈。
     if (!state) {
       const fallback = defaultStateForSignup();
       try {
-        writeState(db, user.id, fallback);
-        state = readState(db, user.id);
+        (await writeState(db, user.id, fallback));
+        state = (await readState(db, user.id));
       } catch (error) {
         console.error('初始化缺失的账号数据失败:', error);
       }
@@ -681,7 +696,7 @@ async function handleState(req, res, user) {
     const validationError = validateStatePayload(body);
     if (validationError) return sendJSON(res, 400, { ok: false, error: validationError });
     try {
-      const result = writeState(db, user.id, body);
+      const result = (await writeState(db, user.id, body));
       return sendJSON(res, 200, {
         ok: true,
         written: result.written.length,
@@ -695,7 +710,7 @@ async function handleState(req, res, user) {
           code: error.code,
           error: '账户数据已在其他页面更新，请重新读取后再保存。',
           revision: error.actualRevision,
-          state: readState(db, user.id)
+          state: (await readState(db, user.id))
         });
       }
       console.error('writeState failed:', error);
@@ -710,15 +725,15 @@ async function handleState(req, res, user) {
 
 async function handleAccount(req, res, user, pathname) {
   if (pathname === '/api/account' && req.method === 'GET') {
-    const profile = db.prepare('SELECT id, username, created_at FROM users WHERE id = ?').get(user.id);
-    const revision = db.prepare('SELECT revision, updated_at FROM state_revisions WHERE user_id = ?').get(user.id);
-    const counts = db.prepare(`
+    const profile = (await db.prepare('SELECT id, username, created_at FROM users WHERE id = ?').get(user.id));
+    const revision = (await db.prepare('SELECT revision, updated_at FROM state_revisions WHERE user_id = ?').get(user.id));
+    const counts = (await db.prepare(`
       SELECT
         (SELECT COUNT(*) FROM word_progress WHERE user_id = ?) AS tracked_words,
         (SELECT COUNT(*) FROM activity WHERE user_id = ?) AS activity_count,
         (SELECT COUNT(*) FROM exam_sessions WHERE user_id = ?) AS exam_count,
         (SELECT COUNT(*) FROM state_events WHERE user_id = ?) AS save_count
-    `).get(user.id, user.id, user.id, user.id);
+    `).get(user.id, user.id, user.id, user.id));
     return sendJSON(res, 200, {
       ok: true,
       profile: {
@@ -732,7 +747,7 @@ async function handleAccount(req, res, user, pathname) {
   }
 
   if (pathname === '/api/account/export' && req.method === 'GET') {
-    const state = readState(db, user.id);
+    const state = (await readState(db, user.id));
     return sendJSON(res, 200, {
       ok: true,
       format: 'cet6-study-desk-backup',
@@ -750,8 +765,8 @@ async function handleAccount(req, res, user, pathname) {
     if (validationError) return sendJSON(res, 400, { ok: false, error: `备份未导入：${validationError}` });
     try {
       // 导入是用户主动确认后的完整恢复操作，不要求旧版本号匹配。
-      const result = writeState(db, user.id, importedState, { checkRevision: false });
-      const state = readState(db, user.id);
+      const result = (await writeState(db, user.id, importedState, { checkRevision: false }));
+      const state = (await readState(db, user.id));
       return sendJSON(res, 200, { ok: true, revision: result.revision, state });
     } catch (error) {
       console.error('import state failed:', error);
@@ -766,10 +781,10 @@ async function handleAccount(req, res, user, pathname) {
 
 async function handleReports(req, res, user, pathname, requestUrl) {
   if (req.method !== 'GET') return sendJSON(res, 405, { ok: false, error: 'Method not allowed' });
-  if (pathname === '/api/reports/summary') return sendJSON(res, 200, querySummary(db, user.id));
+  if (pathname === '/api/reports/summary') return sendJSON(res, 200, (await querySummary(db, user.id)));
   if (pathname === '/api/reports/words') {
     const limit = Math.max(1, Math.min(500, Number(requestUrl.searchParams.get('limit')) || 50));
-    return sendJSON(res, 200, queryWordStats(db, user.id, limit));
+    return sendJSON(res, 200, (await queryWordStats(db, user.id, limit)));
   }
   return sendJSON(res, 404, { ok: false, error: 'Not found' });
 }
@@ -786,6 +801,12 @@ async function serveResource(res, requestUrl, req) {
   }
   const filePath = safePath(SOURCE_ROOT, relativePath);
   if (!filePath) return sendText(res, 403, 'Resource path is outside the configured library');
+  const cloudURL = await resourceDownloadURL(relativePath.replaceAll(path.sep, '/'), req.method);
+  if (cloudURL) {
+    res.writeHead(307, { Location: cloudURL, 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer' });
+    return res.end();
+  }
+  if (publicMediaKeys) return sendText(res, 404, 'Resource is not deployed');
   return serveFile(res, filePath, { req });
 }
 
@@ -797,6 +818,8 @@ async function serveStatic(res, pathname, req) {
     return sendText(res, 400, 'Invalid URL');
   }
   const relative = decoded === '/' ? 'index.html' : decoded.replace(/^\/+/, '');
+  // Root-based deployment packages must never expose server code or secrets.
+  if (!['index.html', 'app.js', 'styles.css', 'favicon.svg'].includes(relative)) return sendText(res, 404, 'Not found');
   const filePath = safePath(PUBLIC_ROOT, relative);
   if (!filePath) return sendText(res, 403, 'Invalid path');
   return serveFile(res, filePath, { cache: pathname !== '/', req });
@@ -805,6 +828,14 @@ async function serveStatic(res, pathname, req) {
 async function requestHandler(req, res) {
   const requestUrl = new URL(req.url || '/', `http://${HOST}:${PORT}`);
   res.setHeader('Vary', 'Accept-Encoding');
+  if (PRODUCTION) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    const origin = req.headers.origin;
+    const expected = process.env.CET6_ORIGIN || (req.headers.host ? `https://${req.headers.host}` : '');
+    if (origin && origin !== expected && !( !PRODUCTION && origin === `http://${req.headers.host}`))
+      return sendJSON(res, 403, { ok: false, error: '禁止跨站写入' });
+    if (req.headers['sec-fetch-site'] === 'cross-site') return sendJSON(res, 403, { ok: false, error: '禁止跨站写入' });
+  }
 
   if (requestUrl.pathname === '/api/health') {
     let sourceAvailable = false;
@@ -816,7 +847,7 @@ async function requestHandler(req, res) {
     }
     let integrity = 'ok';
     try {
-      integrity = db.prepare('PRAGMA integrity_check').get()?.integrity_check || 'unknown';
+      integrity = (await db.prepare('PRAGMA integrity_check').get())?.integrity_check || 'unknown';
     } catch {
       integrity = 'failed';
     }
@@ -825,17 +856,16 @@ async function requestHandler(req, res) {
       host: HOST,
       port: PORT,
       sourceAvailable,
-      storage: 'sqlite',
+      storage: CLOUD_DATABASE ? 'postgresql' : 'sqlite',
       schemaVersion: DATABASE_SCHEMA_VERSION,
       integrity,
-      tables: db.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").get().c,
       now: new Date().toISOString()
     });
   }
 
   if (requestUrl.pathname.startsWith('/api/auth/')) return handleAuth(req, res, requestUrl.pathname);
 
-  const user = getSessionUser(req);
+  const user = (await getSessionUser(req));
 
   if (requestUrl.pathname === '/api/state') {
     if (!user) return sendJSON(res, 401, { ok: false, error: '请先登录' });
@@ -866,6 +896,13 @@ async function requestHandler(req, res) {
   if (requestUrl.pathname.startsWith('/content/')) {
     if (!user) return sendJSON(res, 401, { ok: false, error: '请先登录' });
     const relative = requestUrl.pathname.slice('/content/'.length);
+    if (relative === 'catalog.json' && publicMediaKeys) {
+      const original = JSON.parse(await readFile(path.join(CONTENT_ROOT, 'catalog.json'), 'utf8'));
+      const items = original.items.filter(item => publicMediaKeys.has(item.relativePath));
+      return sendJSON(res, 200, { items, totalFiles: items.length,
+        totalBytes: items.reduce((sum, item) => sum + (item.size || item.bytes || 0), 0),
+        sourceAvailable: true, summary: { audio: items.length, documents: 0 } });
+    }
     const filePath = safePath(CONTENT_ROOT, relative);
     if (!filePath) return sendText(res, 403, 'Invalid content path');
     return serveFile(res, filePath, { cache: false, req });
@@ -887,8 +924,8 @@ function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`收到 ${signal}，正在关闭 HTTP 服务并保存 SQLite WAL。`);
-  server.close(() => {
-    try { db.close(); } finally { process.exit(0); }
+  server.close(async () => {
+    try { await db.close(); } finally { process.exit(0); }
   });
   setTimeout(() => {
     try { db.close(); } finally { process.exit(1); }

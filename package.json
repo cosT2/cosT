@@ -1,11 +1,50 @@
 {
-  "name": "cet6-study-site-deployment",
+  "name": "cet6-study-desk",
+  "version": "0.1.0",
   "private": true,
+  "description": "本地运行的英语六级复习工作台",
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@aws-sdk/s3-request-presigner": "^3.0.0",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0",
+    "acorn": "^8.15.0",
+    "fake-indexeddb": "^6.2.5"
   },
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "build:deployment": "node scripts/build-deployment.mjs",
+    "test:deployment": "node scripts/verify-deployment.mjs",
+    "check:deployment": "node --check scripts/build-deployment.mjs && node --check scripts/verify-deployment.mjs",
+    "index-content": "node scripts/index-library.mjs",
+    "import-vocabulary": "node scripts/import-vocabulary.mjs",
+    "extract-exams": "node scripts/extract-exam-content.mjs && node scripts/sanitize-real-exams.mjs content/real-exams.rebuilt.json content/real-exams.next.json content/real-exams.json && node scripts/repair-real-exam-content.mjs content/real-exams.next.json content/real-exams.rebuilt.json content/real-exams.json content/real-exams.repaired.json && node scripts/validate-content.mjs content/real-exams.repaired.json && node scripts/promote-exam-content.mjs content/real-exams.repaired.json content/real-exams.json",
+    "recover-verified-questions": "node scripts/recover-verified-questions.mjs",
+    "sanitize-exams": "node scripts/sanitize-real-exams.mjs",
+    "extract-mocks": "node scripts/extract-mock-content.mjs",
+    "backup-db": "node scripts/backup-database.mjs",
+    "test:backend": "node scripts/verify-backend.mjs",
+    "test:backend-http": "node scripts/verify-http.mjs",
+    "validate-content": "node scripts/validate-content.mjs",
+    "audit:questions": "node scripts/audit-all-questions.mjs",
+    "parse-public-papers": "node scripts/parse-public-papers.mjs content/_public-answers/papers content/_public-answers/structure.json content/_public-answers/normalized.json",
+    "apply-public-answers": "node scripts/apply-public-answers.mjs",
+    "merge-public-exam-quiz": "node scripts/merge-public-exam-quiz.mjs",
+    "audit-options": "node scripts/audit-option-structure.mjs",
+    "verify-db-migration": "node scripts/verify-db-migration.mjs",
+    "parse-public-with-explain": "node scripts/parse-public-with-explain.mjs",
+    "adjudicate-answers": "node scripts/adjudicate-answer-conflicts.mjs",
+    "rebuild-from-public": "node scripts/rebuild-from-public.mjs",
+    "compare-rebuild": "node scripts/compare-rebuild.mjs",
+    "precheck-promote": "node scripts/precheck-promote.mjs",
+    "promote-rebuild": "node scripts/promote-rebuild.mjs",
+    "test:api": "node scripts/verify-api-e2e.mjs",
+    "check": "node --check server.mjs && node --check db.mjs && node --check public/app.js && node --check scripts/index-library.mjs && node --check scripts/import-vocabulary.mjs && node --check scripts/extract-exam-content.mjs && node --check scripts/repair-real-exam-content.mjs && node --check scripts/extract-mock-content.mjs && node --check scripts/sanitize-real-exams.mjs && node --check scripts/promote-exam-content.mjs && node --check scripts/recover-verified-questions.mjs && node --check scripts/fix-known-content-issues.mjs && node --check scripts/validate-content.mjs && node --check scripts/backup-database.mjs && node --check scripts/verify-backend.mjs && node --check scripts/verify-http.mjs && node --check scripts/lib-pdf-answers.mjs && node --check scripts/lib-public-answers.mjs && node --check scripts/parse-public-papers.mjs && node --check scripts/parse-public-with-explain.mjs && node --check scripts/apply-public-answers.mjs && node --check scripts/merge-public-exam-quiz.mjs && node --check scripts/adjudicate-answer-conflicts.mjs && node --check scripts/rebuild-from-public.mjs && node --check scripts/compare-rebuild.mjs && node --check scripts/precheck-promote.mjs && node --check scripts/promote-rebuild.mjs && node --check scripts/audit-option-structure.mjs && node --check scripts/verify-db-migration.mjs && node --check scripts/verify-api-e2e.mjs && node --check scripts/repair-2019-june-set1-cloze.mjs && node --check scripts/repair-2019-june-set1-listening-columns.mjs && node --check scripts/repair-2019-june-set1-q39.mjs && node --check scripts/repair-2019-june-set1-listening-order.mjs && node --check scripts/repair-2019-june-set1-passage-ocr.mjs && node --check scripts/enable-2019-june-set1-full.mjs"
   }
 }
