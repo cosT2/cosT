@@ -1,4 +1,4 @@
-import { staticFetch as fetch } from './static-store.js?v=20261004-media-1';
+import { staticFetch as fetch } from './static-store.js?v=20261004-media-2';
 const APP_VERSION = '0.1.0';
 const DEFAULT_WORD_BATCH_SIZE = 24;
 const DEFAULT_WORD_ORDER_SEED = 20260921;
@@ -1162,6 +1162,14 @@ function realExamAudioUrl(exam) {
   try { return new URL(url, window.location.href).href; } catch { return ''; }
 }
 
+function listeningPlaybackLabel(session) {
+  const player = document.querySelector('audio[data-exam-audio]');
+  if (player?.dataset.examAudio === session.examId) {
+    return !player.paused && !player.ended ? '音频播放中' : player.currentTime > 0 ? '已暂停' : '尚未播放';
+  }
+  return Number(session.audioPosition || 0) > 0 ? '已暂停' : '尚未播放';
+}
+
 function renderRealExamCard(exam) {
   const listeningCount = Number(exam.listeningCount || (exam.questions || []).filter((question) => question.type === 'listening').length);
   const readingCount = Number(exam.readingCount || (exam.questions || []).filter((question) => question.type === 'reading').length);
@@ -1199,7 +1207,7 @@ function realRemainingSeconds(exam, mode, session) {
 
 function renderRealExamHeader(exam, mode, session) {
   const remaining = realRemainingSeconds(exam, mode, session);
-  const timerLabel = remaining === null ? (mode === 'listening' ? (session.audioPlaying ? '音频播放中' : '尚未播放') : '—') : formatTimer(remaining);
+  const timerLabel = remaining === null ? (mode === 'listening' ? listeningPlaybackLabel(session) : '—') : formatTimer(remaining);
   const submittedNote = session.submittedAt ? '本次已提交，答案已锁定；可以查看并复盘。' : '交卷前不显示答案，作答会自动保存。';
   const modeLabel = mode === 'full' ? '整套模拟' : mode === 'reading' ? '阅读专项' : mode === 'listening' ? '听力专项' : '写译专项';
   const answerSourcePath = exam.answerSourceFiles?.[0] || exam.questions?.find((question) => question.answerSourcePath)?.answerSourcePath || '';
@@ -1469,7 +1477,7 @@ function renderListeningWorkspace(exam, session) {
   const questions = realQuestionsFor(exam, 'listening');
   const remaining = realRemainingSeconds(exam, 'listening', session);
   const expired = remaining !== null && remaining <= 0;
-  const clockLabel = remaining === null ? (session.audioPlaying ? '音频播放中' : '尚未播放') : formatTimer(remaining);
+  const clockLabel = remaining === null ? listeningPlaybackLabel(session) : formatTimer(remaining);
   return `<div class="exam-workspace-page">${renderRealExamHeader(exam, 'listening', session)}<div class="listening-rules card card-pad"><div><div class="eyebrow">听力练习</div><h2>${session.listeningEndedAt ? '听力结束，进入 2 分钟答题窗口' : '听力播放期间只显示选项'}</h2><p>${session.listeningEndedAt ? '考试式练习不再播放下一段材料；请在窗口结束前完成选择。' : '不显示题干和原文。音频支持点击播放、暂停和拖动进度。播放结束后才显示题干并开始 2 分钟答题窗口。'}</p></div><div class="listening-window-clock" id="listening-window-timer">${clockLabel}</div></div><div class="exam-workspace"><main class="exam-question-pane">${renderExamAudioPanel(exam, 'listening', session)}${questions.map((question, index) => renderRealQuestionCard(question, index, session, 'listening')).join('') || `<div class="empty-state"><strong>没有可识别的听力选择题</strong><span>请核对本套试卷是否为英语六级题目。</span></div>`}</main>${renderRealAnswerSheet(questions, session, '听力答题卡')}</div>${expired ? '<div class="notice"><span class="notice-icon">!</span><div><strong>2 分钟答题窗口已结束</strong>仍可查看已保存作答，但本次听力窗口不会自动重置。</div></div>' : ''}</div>`;
 }
 
@@ -1651,7 +1659,7 @@ function startRealExamTimerLoop() {
     const remaining = realRemainingSeconds(exam, viewState.realExamMode, session);
     const timer = document.querySelector('#real-exam-timer');
     const windowTimer = document.querySelector('#listening-window-timer');
-    const timerLabel = remaining === null ? (viewState.realExamMode === 'listening' ? (session.audioPlaying ? '音频播放中' : '尚未播放') : '—') : formatTimer(remaining);
+    const timerLabel = remaining === null ? (viewState.realExamMode === 'listening' ? listeningPlaybackLabel(session) : '—') : formatTimer(remaining);
     if (timer) timer.textContent = timerLabel;
     if (windowTimer) windowTimer.textContent = timerLabel;
     if (remaining !== null && remaining <= 0) {
@@ -2220,6 +2228,8 @@ function handleExamAudioPlayback(event) {
     return;
   }
   session.audioPlaying = event.type === 'play' && !audio.ended;
+  session.audioPosition = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+  if (event.type === 'pause' && audio.isConnected) void saveState('');
   const status = document.querySelector('[data-audio-status]');
   if (status && !session.listeningEndedAt) status.textContent = session.audioPlaying ? '正在播放' : audio.currentTime > 0 ? '已暂停' : '尚未播放';
   const clock = document.querySelector('#real-exam-timer, #listening-window-timer');
@@ -2230,6 +2240,36 @@ function handleExamAudioPlayback(event) {
 
 document.addEventListener('play', handleExamAudioPlayback, true);
 document.addEventListener('pause', handleExamAudioPlayback, true);
+
+const audioPositionSaveTimes = new WeakMap();
+document.addEventListener('loadedmetadata', event => {
+  const audio = event.target;
+  if (!(audio instanceof HTMLMediaElement) || !audio.matches('[data-exam-audio]')) return;
+  const exam = getRealExam(audio.dataset.examAudio);
+  if (!exam) return;
+  const session = getRealSession(exam, viewState.realExamMode || 'full');
+  const position = Number(session.audioPosition || 0);
+  session.audioPlaying = false;
+  const status = document.querySelector('[data-audio-status]');
+  if (status && !session.listeningEndedAt) status.textContent = position > 0 ? '已暂停' : '尚未播放';
+  if (!session.listeningEndedAt && position > 0 && Number.isFinite(audio.duration)) {
+    audio.currentTime = Math.min(position, Math.max(0, audio.duration - 1));
+  }
+}, true);
+function rememberAudioPosition(event) {
+  const audio = event.target;
+  if (!(audio instanceof HTMLMediaElement) || !audio.matches('[data-exam-audio]') || !audio.isConnected) return;
+  const exam = getRealExam(audio.dataset.examAudio);
+  if (!exam || !Number.isFinite(audio.currentTime)) return;
+  const session = getRealSession(exam, viewState.realExamMode || 'full');
+  session.audioPosition = audio.currentTime;
+  if (event.type === 'seeked' || Date.now() - (audioPositionSaveTimes.get(audio) || 0) >= 10000) {
+    audioPositionSaveTimes.set(audio, Date.now());
+    void saveState('');
+  }
+}
+document.addEventListener('timeupdate', rememberAudioPosition, true);
+document.addEventListener('seeked', rememberAudioPosition, true);
 
 document.addEventListener('compositionstart', (event) => {
   if (event.target.id === 'word-search' || event.target.id === 'resource-search') searchCompositionActive = true;
