@@ -41,7 +41,7 @@ async function localState(method, incoming, force = false) {
   });
 }
 async function loadLibrary(kind) {
-  if (!libraries.has(kind)) libraries.set(kind, nativeFetch(new URL(`./content/${kind}-exams.json`, import.meta.url))
+  if (!libraries.has(kind)) libraries.set(kind, nativeFetch(new URL(`./content/${kind}-exams.json`, import.meta.url), { cache: 'no-cache' })
     .then(async r => { if (!r.ok) throw new Error('试卷下载失败'); return r.json(); })
     .catch(error => { libraries.delete(kind); throw error; }));
   return libraries.get(kind);
@@ -68,7 +68,14 @@ export async function staticFetch(input, options = {}) {
     const media = await loadMedia();
     return exam ? response({ ...exam, audio: media[exam.audio?.sourcePath] || null, ok: true }) : response({ ok: false }, 404);
   }
-  if (value === '/content/catalog.json') return response({ items: [], totalFiles: 0, totalBytes: 0, summary: {}, sourceAvailable: false });
+  if (value === '/content/catalog.json') {
+    const media = await loadMedia();
+    const items = Object.entries(media).map(([relativePath, item], index) => ({ id: `media-${index}`,
+      name: item.label, relativePath, url: item.url, bytes: item.bytes || 0,
+      extension: item.format, kind: 'audio', topic: '听力材料', available: true }));
+    return response({ items, totalFiles: items.length, totalBytes: items.reduce((n,x)=>n+x.bytes,0),
+      summary: { audio: items.length }, sourceAvailable: true });
+  }
   if (value.startsWith('/content/')) return nativeFetch(new URL(`.${value}`, import.meta.url), options);
   if (value.startsWith('/api/')) return response({ ok: false, error: '临时公开版不提供账号接口。' }, 404);
   return nativeFetch(input, options);
